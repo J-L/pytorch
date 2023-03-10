@@ -26,6 +26,11 @@ from torch.testing._internal.common_utils import (
     TestCase,
 )
 
+from torch._subclasses.fake_tensor import (
+    FakeTensor,
+    FakeTensorMode,
+)
+
 # Tests are ported from pytorch/nestedtensor.
 # This makes porting as_nested_tensor easier in the future.
 
@@ -94,6 +99,18 @@ def random_nt(device, dtype, num_tensors, max_dims, min_dims=None):
         t1 = torch.randn(tensor_dims, device=device, dtype=dtype)
         ts1.append(t1)
     return torch.nested.nested_tensor(ts1, device=device, dtype=dtype)
+
+
+class CrossRefNestedFakeMode(torch._subclasses.CrossRefFakeMode):
+    def __init__(self):
+        super().__init__(
+            self.ignore_op, check_strides=True,
+            check_aliasing=False,
+        )  # TODO: enable alias checking
+
+    @staticmethod
+    def ignore_op(func):
+        return False
 
 
 class TestNestedTensor(TestCase):
@@ -1935,6 +1952,30 @@ class TestNestedTensorDeviceType(TestCase):
         assert nt_cont.is_same_size(nt_empty)
         with self.assertRaisesRegex(RuntimeError, "empty_like only supports contiguous memory format for Nested Tensors"):
             nt_empty = torch.empty_like(nt_noncont)
+
+    def test_fake_nt_creation(self, device):
+        with CrossRefNestedFakeMode():
+            components = [
+                torch.randn(3, 2, device='cpu'),
+                torch.randn(4, 2, device='cpu')
+            ]
+            nt = torch.nested.nested_tensor(components)
+
+            # ensure passing kwargs works
+            nt2 = torch.nested.nested_tensor(
+                components, device=device, dtype=torch.float64,
+                requires_grad=True, pin_memory=False)
+
+    def test_fake_nt_fallback(self, device):
+        with CrossRefNestedFakeMode():
+            components = [
+                torch.randn(3, 2, device=device),
+                torch.randn(4, 2, device=device)
+            ]
+            nt = torch.nested.nested_tensor(components)
+
+            # run op via fallback
+            b = nt + 1
 
 
 class TestNestedTensorAutograd(TestCase):
